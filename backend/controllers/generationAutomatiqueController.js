@@ -23,6 +23,11 @@ export const genererAffectations = asyncHandler(async (req, res) => {
         coursIds = [],
         groupeIds = [],
         ecraserAffectations = false,
+        //les nouveaux paramètres que j'ai ajoutés
+        maxSessionHours,
+        maxHoursPerDayGroup,
+        maxHoursPerDayCourse,
+        allowSameCourseTwicePerDay,
     } = req.body;
 
     const idUserAdmin = req.user.id_user;
@@ -45,6 +50,24 @@ export const genererAffectations = asyncHandler(async (req, res) => {
         });
     }
 
+    const optionsValidation = [
+        { key: "maxSessionHours", value: maxSessionHours, min: 1, max: 8 },
+        { key: "maxHoursPerDayGroup", value: maxHoursPerDayGroup, min: 1, max: 12 },
+        { key: "maxHoursPerDayCourse", value: maxHoursPerDayCourse, min: 1, max: 8 },
+    ];
+
+    for (const option of optionsValidation) {
+        if (option.value !== undefined) {
+            const nombre = Number(option.value);
+            if (Number.isNaN(nombre) || nombre < option.min || nombre > option.max) {
+                return res.status(400).json({
+                    message: "Paramètres invalides",
+                    error: `${option.key} doit être compris entre ${option.min} et ${option.max}`,
+                });
+            }
+        }
+    }
+
     try {
         // Générer les affectations
         const resultat = await genererAffectationsAutomatiques({
@@ -54,6 +77,11 @@ export const genererAffectations = asyncHandler(async (req, res) => {
             groupeIds,
             idUserAdmin,
             ecraserAffectations,
+            //les nouveaux paramètres que j'ai ajoutés
+            maxSessionHours,
+            maxHoursPerDayGroup,
+            maxHoursPerDayCourse,
+            allowSameCourseTwicePerDay,
         });
 
         // Vérifier les conflits pour les nouvelles affectations

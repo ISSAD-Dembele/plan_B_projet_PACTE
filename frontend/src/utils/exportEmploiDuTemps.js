@@ -54,24 +54,25 @@ export const exportToExcel = (affectations, filename = 'emploi-du-temps') => {
  */
 export const exportToPDF = async (affectations, filename = 'emploi-du-temps', title = 'Emploi du Temps') => {
     try {
-        // Charger dynamiquement jspdf-autotable pour éviter les problèmes avec Vite
+        // jspdf-autotable (ESM) n'installe doc.autoTable que si jsPDF est sur window ;
+        // avec Vite + import ESM de jsPDF, il faut utiliser l'API autoTable(doc, opts).
+        let autoTable;
         try {
-            await import('jspdf-autotable');
+            const autotableMod = await import('jspdf-autotable');
+            autoTable = autotableMod.default;
         } catch (importError) {
             console.error('Erreur lors du chargement de jspdf-autotable:', importError);
             alert('Erreur: Impossible de charger la bibliothèque PDF. Veuillez réessayer ou utiliser Excel/CSV.');
             return;
         }
-        
-        const doc = new jsPDF();
-        
-        // Vérifier si autoTable est disponible après l'import
-        if (typeof doc.autoTable !== 'function') {
-            console.error('jspdf-autotable n\'est pas correctement chargé.');
-            console.error('Type de doc.autoTable:', typeof doc.autoTable);
+
+        if (typeof autoTable !== 'function') {
+            console.error('jspdf-autotable: export default manquant ou invalide.');
             alert('Erreur: La bibliothèque PDF n\'est pas correctement chargée. Veuillez réessayer ou utiliser Excel/CSV.');
             return;
         }
+
+        const doc = new jsPDF();
 
         // Titre
         doc.setFontSize(18);
@@ -115,8 +116,8 @@ export const exportToPDF = async (affectations, filename = 'emploi-du-temps', ti
             'Statut',
         ];
 
-        // Créer le tableau
-        doc.autoTable({
+        // Tableau (API fonctionnelle — compatible bundler sans window.jsPDF)
+        autoTable(doc, {
             head: [headers],
             body: tableData,
             startY: 35,
@@ -126,7 +127,6 @@ export const exportToPDF = async (affectations, filename = 'emploi-du-temps', ti
             margin: { top: 35 },
         });
 
-        // Télécharger le PDF
         doc.save(`${filename}.pdf`);
     } catch (error) {
         console.error('Erreur lors de la génération du PDF:', error);

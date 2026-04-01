@@ -73,6 +73,24 @@ const calculerDureeCreneau = (heureDebut, heureFin) => {
 };
 
 /**
+ * Convertit une heure (HH:mm, HH:mm:ss ou Date) en minutes
+ * @param {String|Date} heure
+ * @returns {Number}
+ */
+const convertirHeureEnMinutes = (heure) => {
+    if (heure instanceof Date) {
+        return heure.getHours() * 60 + heure.getMinutes();
+    }
+
+    const heureStr = typeof heure === "string" && heure.includes("T")
+        ? new Date(heure).toTimeString().slice(0, 8)
+        : heure;
+
+    const [h = "0", m = "0"] = String(heureStr).split(":");
+    return parseInt(h, 10) * 60 + parseInt(m, 10);
+};
+
+/**
  * Vérifie si une date est dans une période d'événement bloquant
  * @param {String} date - Date à vérifier (format YYYY-MM-DD)
  * @param {Array} evenements - Liste des événements
@@ -220,6 +238,49 @@ const genererDatesSeances = (dateDebut, dateFin, jourSemaine, evenements) => {
 };
 
 /**
+ * Génère tous les slots de planification dans l'ordre chronologique
+ * @param {Array} creneaux
+ * @param {String} dateDebut
+ * @param {String} dateFin
+ * @param {Array} evenements
+ * @returns {Array}
+ */
+const genererSlotsChronologiques = (creneaux, dateDebut, dateFin, evenements) => {
+    const slots = [];
+
+    for (const creneau of creneaux) {
+        const dates = genererDatesSeances(
+            dateDebut,
+            dateFin,
+            creneau.jour_semaine,
+            evenements
+        );
+
+        for (const date of dates) {
+            slots.push({
+                date,
+                id_creneau: creneau.id_creneau,
+                jour_semaine: creneau.jour_semaine,
+                heure_debut: creneau.heure_debut,
+                heure_fin: creneau.heure_fin,
+                dureeHeures: calculerDureeCreneau(
+                    creneau.heure_debut,
+                    creneau.heure_fin
+                ),
+                debutMinutes: convertirHeureEnMinutes(creneau.heure_debut),
+            });
+        }
+    }
+
+    slots.sort((a, b) => {
+        if (a.date !== b.date) return a.date.localeCompare(b.date);
+        return a.debutMinutes - b.debutMinutes;
+    });
+
+    return slots;
+};
+
+/**
  * Trouve un enseignant disponible pour un cours
  * @param {Number} idCours - ID du cours
  * @param {Number} idCreneau - ID du créneau
@@ -324,6 +385,10 @@ export const genererAffectationsAutomatiques = async (params) => {
         groupeIds = [],
         idUserAdmin,
         ecraserAffectations = false,
+        maxSessionHours = 4,
+        maxHoursPerDayGroup = 6,
+        maxHoursPerDayCourse = 4,
+        allowSameCourseTwicePerDay = false,
     } = params;
 
     const resultat = {
@@ -465,7 +530,15 @@ export const genererAffectationsAutomatiques = async (params) => {
             });
         }
 
-        // 10. Pour chaque groupe, générer les affectations pour ses cours spécifiques
+        // 10. Générer les slots disponibles dans l'ordre chronologique
+        const slotsChronologiques = genererSlotsChronologiques(
+            creneaux,
+            dateDebut,
+            dateFin,
+            evenements
+        );
+
+        // 11. Pour chaque groupe, répartir les cours de manière équilibrée
         for (const groupe of groupes) {
             const coursDuGroupe = coursParGroupe[groupe.id_groupe] || [];
             
@@ -474,150 +547,200 @@ export const genererAffectationsAutomatiques = async (params) => {
                 continue;
             }
 
-            for (const coursItem of coursDuGroupe) {
-                const volumeHoraire = coursItem.volume_horaire;
+            const etatCours = coursDuGroupe.map((coursItem) => ({
+                coursItem,
+                heuresRestantes: Number(coursItem.volume_horaire) || 0,
+                heuresPlanifiees: 0,
+            }));
+            const indexParCours = new Map(
+                etatCours.map((etat, index) => [etat.coursItem.id_cours, index])
+            );
+            const heuresParJourGroupe = {};
+            const heuresParJourCours = {};
+            let dernierCoursPlanifie = null;
+            let roundRobinIndex = 0;
 
-                // Calculer le nombre de séances nécessaires
-                // Utiliser la durée moyenne des créneaux pour un calcul plus précis
-                let dureeTotaleCreneaux = 0;
-                for (const c of creneaux) {
-                    dureeTotaleCreneaux += calculerDureeCreneau(c.heure_debut, c.heure_fin);
+            for (const slot of slotsChronologiques) {
+                const tousPlanifies = etatCours.every((etat) => etat.heuresRestantes <= 0);
+                if (tousPlanifies) break;
+
+                if (
+                    !estGroupeDisponible(
+                        groupe.id_groupe,
+                        slot.id_creneau,
+                        slot.date,
+                        affectationsExistantes
+                    )
+                ) {
+                    continue;
                 }
-                const dureeMoyenneCreneau = dureeTotaleCreneaux / creneaux.length;
-                const nombreSeances = calculerNombreSeances(volumeHoraire, dureeMoyenneCreneau);
 
-                // Générer les dates de séances pour chaque créneau
-                let seancesCreees = 0;
-                const affectationsPourCeCoursGroupe = [];
+                const heuresJourGroupe = heuresParJourGroupe[slot.date] || 0;
+                if (heuresJourGroupe + slot.dureeHeures > maxHoursPerDayGroup) {
+                    continue;
+                }
 
-                for (const creneau of creneaux) {
-                    if (seancesCreees >= nombreSeances) break;
+                if (slot.dureeHeures > maxSessionHours) {
+                    continue;
+                }
 
-                    const dates = genererDatesSeances(
-                        dateDebut,
-                        dateFin,
-                        creneau.jour_semaine,
-                        evenements
+                // Alternance: partir de la prochaine position pour éviter de toujours reprendre le même cours
+                const ordreCours = etatCours
+                    .map((etat, index) => etatCours[(roundRobinIndex + index) % etatCours.length])
+                    .filter((etat) => etat.heuresRestantes > 0);
+
+                const candidats = ordreCours.filter((etat) => {
+                    const coursId = etat.coursItem.id_cours;
+                    const mapCours = heuresParJourCours[coursId] || {};
+                    const heuresCoursCeJour = mapCours[slot.date] || 0;
+                    const resteApresSlot = etat.heuresRestantes - slot.dureeHeures;
+                    const autoriserDernierPetitReste = etat.heuresRestantes <= maxSessionHours;
+
+                    if (
+                        !allowSameCourseTwicePerDay &&
+                        heuresCoursCeJour > 0 &&
+                        ordreCours.length > 1
+                    ) {
+                        return false;
+                    }
+
+                    if (heuresCoursCeJour + slot.dureeHeures > maxHoursPerDayCourse) {
+                        return false;
+                    }
+
+                    return resteApresSlot >= -0.01 || autoriserDernierPetitReste;
+                });
+
+                candidats.sort((a, b) => {
+                    if (a.coursItem.id_cours === dernierCoursPlanifie && b.coursItem.id_cours !== dernierCoursPlanifie) return 1;
+                    if (b.coursItem.id_cours === dernierCoursPlanifie && a.coursItem.id_cours !== dernierCoursPlanifie) return -1;
+                    return b.heuresRestantes - a.heuresRestantes;
+                });
+
+                let slotPlanifie = false;
+
+                for (const candidat of candidats) {
+                    const coursItem = candidat.coursItem;
+                    const enseignant = trouverEnseignantDisponible(
+                        coursItem.id_cours,
+                        slot.id_creneau,
+                        slot.date,
+                        enseignants,
+                        disponibilitesParEnseignant,
+                        affectationsExistantes
                     );
 
-                    for (const date of dates) {
-                        if (seancesCreees >= nombreSeances) break;
+                    if (!enseignant) {
+                        continue;
+                    }
 
-                        // Vérifier que le groupe est disponible
-                        if (
-                            !estGroupeDisponible(
-                                groupe.id_groupe,
-                                creneau.id_creneau,
-                                date,
-                                affectationsExistantes
-                            )
-                        ) {
-                            continue;
-                        }
+                    const salle = trouverSalleDisponible(
+                        groupe.effectif,
+                        slot.id_creneau,
+                        slot.date,
+                        salles,
+                        affectationsExistantes
+                    );
 
-                        // Trouver un enseignant disponible
-                        const enseignant = trouverEnseignantDisponible(
-                            coursItem.id_cours,
-                            creneau.id_creneau,
-                            date,
-                            enseignants,
-                            disponibilitesParEnseignant,
-                            affectationsExistantes
-                        );
+                    if (!salle) {
+                        continue;
+                    }
 
-                        if (!enseignant) {
-                            resultat.affectationsEchouees.push({
-                                cours: coursItem.nom_cours,
-                                groupe: groupe.nom_groupe,
-                                date,
-                                creneau: `${creneau.heure_debut}-${creneau.heure_fin}`,
-                                raison: "Aucun enseignant disponible",
-                            });
-                            resultat.statistiques.totalSeancesEchouees++;
-                            continue;
-                        }
+                    try {
+                        const nouvelleAffectation = await Affectation.create({
+                            date_seance: slot.date,
+                            statut: "planifie",
+                            id_cours: coursItem.id_cours,
+                            id_groupe: groupe.id_groupe,
+                            id_user_enseignant: enseignant.id_user,
+                            id_salle: salle.id_salle,
+                            id_creneau: slot.id_creneau,
+                            id_user_admin: idUserAdmin,
+                        });
 
-                        // Trouver une salle disponible
-                        const salle = trouverSalleDisponible(
-                            groupe.effectif,
-                            creneau.id_creneau,
-                            date,
-                            salles,
-                            affectationsExistantes
-                        );
+                        affectationsExistantes.push({
+                            id_user_enseignant: enseignant.id_user,
+                            id_salle: salle.id_salle,
+                            id_groupe: groupe.id_groupe,
+                            id_creneau: slot.id_creneau,
+                            date_seance: slot.date,
+                            statut: "planifie",
+                            id_cours: coursItem.id_cours,
+                        });
 
-                        if (!salle) {
-                            resultat.affectationsEchouees.push({
-                                cours: coursItem.nom_cours,
-                                groupe: groupe.nom_groupe,
-                                date,
-                                creneau: `${creneau.heure_debut}-${creneau.heure_fin}`,
-                                raison: "Aucune salle disponible",
-                            });
-                            resultat.statistiques.totalSeancesEchouees++;
-                            continue;
-                        }
-
-                        // Créer l'affectation
-                        try {
-                            const nouvelleAffectation = await Affectation.create({
-                                date_seance: date,
-                                statut: "planifie",
-                                id_cours: coursItem.id_cours,
-                                id_groupe: groupe.id_groupe,
-                                id_user_enseignant: enseignant.id_user,
-                                id_salle: salle.id_salle,
-                                id_creneau: creneau.id_creneau,
-                                id_user_admin: idUserAdmin,
-                            });
-
-                            affectationsPourCeCoursGroupe.push(nouvelleAffectation);
-                            affectationsExistantes.push({
-                                id_user_enseignant: enseignant.id_user,
-                                id_salle: salle.id_salle,
-                                id_groupe: groupe.id_groupe,
-                                id_creneau: creneau.id_creneau,
-                                date_seance: date,
-                                statut: "planifie",
-                            });
-
-                            resultat.affectationsCreees.push({
-                                id: nouvelleAffectation.id_affectation,
-                                cours: coursItem.nom_cours,
-                                groupe: groupe.nom_groupe,
-                                enseignant: `${enseignant.prenom} ${enseignant.nom}`,
-                                salle: salle.nom_salle,
-                                date,
-                                creneau: `${creneau.heure_debut}-${creneau.heure_fin}`,
-                            });
-
-                            seancesCreees++;
-                            resultat.statistiques.totalSeancesPlanifiees++;
-                        } catch (error) {
-                            console.error(
-                                `Erreur lors de la création de l'affectation:`,
-                                error
+                        const indexCours = indexParCours.get(coursItem.id_cours);
+                        if (indexCours !== undefined) {
+                            etatCours[indexCours].heuresRestantes = Math.max(
+                                0,
+                                etatCours[indexCours].heuresRestantes - slot.dureeHeures
                             );
-                            resultat.affectationsEchouees.push({
-                                cours: coursItem.nom_cours,
-                                groupe: groupe.nom_groupe,
-                                date,
-                                creneau: `${creneau.heure_debut}-${creneau.heure_fin}`,
-                                raison: error.message,
-                            });
-                            resultat.statistiques.totalSeancesEchouees++;
+                            etatCours[indexCours].heuresPlanifiees += slot.dureeHeures;
                         }
+
+                        heuresParJourGroupe[slot.date] = (heuresParJourGroupe[slot.date] || 0) + slot.dureeHeures;
+                        if (!heuresParJourCours[coursItem.id_cours]) {
+                            heuresParJourCours[coursItem.id_cours] = {};
+                        }
+                        heuresParJourCours[coursItem.id_cours][slot.date] =
+                            (heuresParJourCours[coursItem.id_cours][slot.date] || 0) +
+                            slot.dureeHeures;
+
+                        resultat.affectationsCreees.push({
+                            id: nouvelleAffectation.id_affectation,
+                            cours: coursItem.nom_cours,
+                            groupe: groupe.nom_groupe,
+                            enseignant: `${enseignant.prenom} ${enseignant.nom}`,
+                            salle: salle.nom_salle,
+                            date: slot.date,
+                            creneau: `${slot.heure_debut}-${slot.heure_fin}`,
+                        });
+
+                        resultat.statistiques.totalSeancesPlanifiees++;
+                        dernierCoursPlanifie = coursItem.id_cours;
+                        roundRobinIndex =
+                            ((indexParCours.get(coursItem.id_cours) || 0) + 1) % etatCours.length;
+                        slotPlanifie = true;
+                        break;
+                    } catch (error) {
+                        console.error("Erreur lors de la création de l'affectation:", error);
+                        resultat.affectationsEchouees.push({
+                            cours: coursItem.nom_cours,
+                            groupe: groupe.nom_groupe,
+                            date: slot.date,
+                            creneau: `${slot.heure_debut}-${slot.heure_fin}`,
+                            raison: error.message,
+                        });
+                        resultat.statistiques.totalSeancesEchouees++;
                     }
                 }
 
-                // Si on n'a pas créé assez de séances, ajouter un avertissement
-                if (seancesCreees < nombreSeances) {
+                if (!slotPlanifie && candidats.length > 0) {
+                    const premierCandidat = candidats[0].coursItem;
                     resultat.affectationsEchouees.push({
-                        cours: coursItem.nom_cours,
+                        cours: premierCandidat.nom_cours,
+                        groupe: groupe.nom_groupe,
+                        date: slot.date,
+                        creneau: `${slot.heure_debut}-${slot.heure_fin}`,
+                        raison: "Aucun enseignant ou aucune salle disponible pour ce slot",
+                    });
+                    resultat.statistiques.totalSeancesEchouees++;
+                }
+            }
+
+            for (const etat of etatCours) {
+                if (etat.heuresRestantes > 0) {
+                    const seancesTheoriques = calculerNombreSeances(
+                        etat.coursItem.volume_horaire,
+                        maxSessionHours
+                    );
+                    resultat.affectationsEchouees.push({
+                        cours: etat.coursItem.nom_cours,
                         groupe: groupe.nom_groupe,
                         date: "N/A",
                         creneau: "N/A",
-                        raison: `Seulement ${seancesCreees}/${nombreSeances} séances créées`,
+                        raison: `Volume partiellement planifié: ${etat.heuresPlanifiees.toFixed(
+                            1
+                        )}h/${etat.coursItem.volume_horaire}h (≈ ${seancesTheoriques} séances attendues)`,
                     });
                 }
             }

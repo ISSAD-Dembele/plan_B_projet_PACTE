@@ -49,6 +49,10 @@ export default function GenerationAutomatique() {
     const [dateDebut, setDateDebut] = useState('');
     const [dateFin, setDateFin] = useState('');
     const [ecraserAffectations, setEcraserAffectations] = useState(false);
+    const [maxSessionHours, setMaxSessionHours] = useState(4);
+    const [maxHoursPerDayGroup, setMaxHoursPerDayGroup] = useState(6);
+    const [maxHoursPerDayCourse, setMaxHoursPerDayCourse] = useState(4);
+    const [allowSameCourseTwicePerDay, setAllowSameCourseTwicePerDay] = useState(false);
     const [resultat, setResultat] = useState(null);
     const [error, setError] = useState('');
     const [dialogOpen, setDialogOpen] = useState(false);
@@ -93,6 +97,10 @@ export default function GenerationAutomatique() {
                 coursIds: selectedCours,
                 groupeIds: selectedGroupes,
                 ecraserAffectations,
+                maxSessionHours: Number(maxSessionHours),
+                maxHoursPerDayGroup: Number(maxHoursPerDayGroup),
+                maxHoursPerDayCourse: Number(maxHoursPerDayCourse),
+                allowSameCourseTwicePerDay,
             };
 
             const response = await generationAutomatiqueAPI.generer(data);
@@ -248,6 +256,51 @@ export default function GenerationAutomatique() {
                                     <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
                                         Si coché, les affectations existantes pour les cours/groupes sélectionnés seront supprimées avant la génération
                                     </Typography>
+                                </Grid>
+
+                                <Grid item xs={12} sm={4}>
+                                    <TextField
+                                        fullWidth
+                                        label="Durée max par séance (h)"
+                                        type="number"
+                                        value={maxSessionHours}
+                                        onChange={(e) => setMaxSessionHours(e.target.value)}
+                                        inputProps={{ min: 1, max: 6, step: 0.5 }}
+                                        helperText="Ex: 2, 3 ou 4 heures"
+                                    />
+                                </Grid>
+                                <Grid item xs={12} sm={4}>
+                                    <TextField
+                                        fullWidth
+                                        label="Max heures/jour (groupe)"
+                                        type="number"
+                                        value={maxHoursPerDayGroup}
+                                        onChange={(e) => setMaxHoursPerDayGroup(e.target.value)}
+                                        inputProps={{ min: 1, max: 12, step: 0.5 }}
+                                    />
+                                </Grid>
+                                <Grid item xs={12} sm={4}>
+                                    <TextField
+                                        fullWidth
+                                        label="Max heures/jour (module)"
+                                        type="number"
+                                        value={maxHoursPerDayCourse}
+                                        onChange={(e) => setMaxHoursPerDayCourse(e.target.value)}
+                                        inputProps={{ min: 1, max: 8, step: 0.5 }}
+                                    />
+                                </Grid>
+                                <Grid item xs={12}>
+                                    <FormControlLabel
+                                        control={
+                                            <Checkbox
+                                                checked={allowSameCourseTwicePerDay}
+                                                onChange={(e) =>
+                                                    setAllowSameCourseTwicePerDay(e.target.checked)
+                                                }
+                                            />
+                                        }
+                                        label="Autoriser plusieurs séances du même module le même jour"
+                                    />
                                 </Grid>
 
                                 <Grid item xs={12}>
