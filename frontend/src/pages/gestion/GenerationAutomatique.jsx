@@ -65,6 +65,7 @@ export default function GenerationAutomatique() {
     const [dialogOpen, setDialogOpen] = useState(false);
 
     useEffect(() => {
+        isMountedRef.current = true;
         return () => {
             isMountedRef.current = false;
         };
