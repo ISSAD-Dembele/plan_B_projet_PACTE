@@ -1,6 +1,6 @@
 import dotenv from 'dotenv';
 import sequelize, { testConnection } from './config/db.js';
-import { DataTypes } from 'sequelize';
+import { DataTypes, Op } from 'sequelize';
 import './models/index.js';
 import {
     Users, Enseignant, Etudiant, Filiere, Groupe, Salle, Cours, Creneau,
@@ -583,6 +583,48 @@ async function seed() {
         ];
         const statutsDemo = ['confirme', 'planifie', 'confirme', 'reporte', 'annule'];
         const affectationsDemo = [];
+        const demoGenerationLabel = 'Démo - génération automatique';
+        const demoSnapshotLabel = 'Planning actif - Démo complète';
+
+        const previousDemoSessions = await GenerationSession.findAll({
+            where: { label: { [Op.like]: `${demoGenerationLabel}%` } },
+            attributes: ['id_generation_session'],
+        });
+        const previousSessionIds = previousDemoSessions.map(s => s.id_generation_session);
+        const affectationCleanupWhere = previousSessionIds.length
+            ? {
+                [Op.or]: [
+                    { id_generation_session: { [Op.in]: previousSessionIds } },
+                    { commentaire: { [Op.like]: 'Séance de démonstration%' } },
+                ],
+            }
+            : { commentaire: { [Op.like]: 'Séance de démonstration%' } };
+        const previousDemoAffectations = await Affectation.findAll({
+            where: affectationCleanupWhere,
+            attributes: ['id_affectation'],
+        });
+        const previousAffectationIds = previousDemoAffectations.map(a => a.id_affectation);
+
+        if (previousAffectationIds.length) {
+            await DemandeReport.destroy({ where: { id_affectation: { [Op.in]: previousAffectationIds } } });
+            await HistoriqueAffectation.destroy({ where: { id_affectation: { [Op.in]: previousAffectationIds } } });
+            await ConflitAffectation.destroy({ where: { id_affectation: { [Op.in]: previousAffectationIds } } });
+            await Affectation.destroy({ where: { id_affectation: { [Op.in]: previousAffectationIds } } });
+        }
+
+        await Conflit.destroy({
+            where: {
+                [Op.or]: [
+                    { description: { [Op.like]: 'Salle % réservée sur deux séances%' } },
+                    { description: { [Op.like]: 'Un même enseignant est affecté sur deux séances%' } },
+                ],
+            },
+        });
+        await Notification.destroy({
+            where: { titre: { [Op.in]: ['Planning généré', 'Demande de report en attente', 'Emploi du temps publié', 'Séance reportée'] } },
+        });
+        await PlanningSnapshot.destroy({ where: { label: demoSnapshotLabel } });
+        await GenerationSession.destroy({ where: { label: { [Op.like]: `${demoGenerationLabel}%` } } });
 
         const pickSalleForCourse = (courseDef) => {
             if (courseDef.type === 'TP') return sallesDemo.tp;
@@ -593,7 +635,7 @@ async function seed() {
 
         const [generationSession] = await GenerationSession.findOrCreate({
             where: {
-                label: 'Démo - génération automatique mai/juin 2026',
+                label: `${demoGenerationLabel} ${PERIOD_START} - ${PERIOD_END}`,
                 date_debut: PERIOD_START,
                 date_fin: PERIOD_END,
                 id_user_admin: admin.id_user,
@@ -624,7 +666,7 @@ async function seed() {
 
         const [snapshot] = await PlanningSnapshot.findOrCreate({
             where: {
-                label: 'Planning actif - Démo complète',
+                label: demoSnapshotLabel,
                 date_debut: PERIOD_START,
                 date_fin: PERIOD_END,
                 id_user_admin: admin.id_user,
