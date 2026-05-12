@@ -1,5 +1,6 @@
 import dotenv from 'dotenv';
 import sequelize, { testConnection } from './config/db.js';
+import { DataTypes } from 'sequelize';
 import './models/index.js';
 import {
     Users, Enseignant, Etudiant, Filiere, Groupe, Salle, Cours, Creneau,
@@ -7,6 +8,7 @@ import {
     Institution
 } from './models/index.js';
 import { hashPassword } from './utils/passwordHelper.js';
+import { ensureTenantColumns } from './utils/tenantHelper.js';
 
 dotenv.config();
 
@@ -332,6 +334,7 @@ async function seed() {
         });
 
         console.log(`✅ Institution par défaut: ${defaultInstitution.id_institution}`);
+        await ensureTenantColumns(sequelize, DataTypes, defaultInstitution);
 
         // Dates dynamiques : 1er jour du mois courant → dernier jour du mois prochain
         const _now   = new Date();

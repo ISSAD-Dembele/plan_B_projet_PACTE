@@ -33,7 +33,7 @@ import {
 } from "./models/index.js";
 import { parseCookies } from "./middleware/cookieMiddleware.js";
 import { csrfProtection } from "./middleware/csrfMiddleware.js";
-import { getDefaultInstitution, TENANT_MODELS, ensureUserMembership } from "./utils/tenantHelper.js";
+import { ensureTenantColumns, ensureUserMembership } from "./utils/tenantHelper.js";
 
 // Import des routes
 import userRoutes from "./routes/userRoutes.js";
@@ -317,6 +317,12 @@ const PORT = process.env.PORT || 5000;
         // en utilisant les noms de tables définis avec freezeTableName
         console.log("--> Toutes les tables synchronisées avec succès !");
 
+        try {
+            await ensureTenantColumns(sequelize, DataTypes);
+        } catch (error) {
+            console.warn("Migration multi-tenant avant seed ignoree:", error.message);
+        }
+
         // Exécuter le seed automatiquement si les tables sont vides
         try {
             // Utiliser le module déjà importé au début du fichier
@@ -376,26 +382,7 @@ const PORT = process.env.PORT || 5000;
         }
 
         try {
-            const queryInterface = sequelize.getQueryInterface();
-            const defaultInstitution = await getDefaultInstitution();
-
-            for (const tableName of TENANT_MODELS) {
-                const columns = await queryInterface.describeTable(tableName).catch(() => null);
-                if (!columns) continue;
-
-                if (!columns.id_institution) {
-                    await queryInterface.addColumn(tableName, "id_institution", {
-                        type: DataTypes.INTEGER,
-                        allowNull: true,
-                    });
-                }
-
-                await sequelize.query(
-                    `UPDATE ${tableName} SET id_institution = :idInstitution WHERE id_institution IS NULL`,
-                    { replacements: { idInstitution: defaultInstitution.id_institution } }
-                ).catch(() => null);
-            }
-
+            const defaultInstitution = await ensureTenantColumns(sequelize, DataTypes);
             const users = await Users.findAll();
             for (const user of users) {
                 await ensureUserMembership(user, defaultInstitution);

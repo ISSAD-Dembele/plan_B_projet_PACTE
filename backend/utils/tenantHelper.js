@@ -8,7 +8,7 @@ import {
 export const DEFAULT_INSTITUTION_SLUG = process.env.DEFAULT_INSTITUTION_SLUG || "default";
 
 export const TENANT_MODELS = [
-    "Filieres",
+    "Filiere",
     "Groupes",
     "Cours",
     "Salles",
@@ -17,7 +17,7 @@ export const TENANT_MODELS = [
     "Disponibilites",
     "Notifications",
     "Conflits",
-    "DemandesReport",
+    "DemandeReports",
     "Evenements",
     "GenerationSessions",
     "PlanningSnapshots",
@@ -84,6 +84,30 @@ export const ensureUserMembership = async (user, institution = null) => {
     });
 
     return membership;
+};
+
+export const ensureTenantColumns = async (sequelize, DataTypes, institution = null) => {
+    const defaultInstitution = institution || await getDefaultInstitution();
+    const queryInterface = sequelize.getQueryInterface();
+
+    for (const tableName of TENANT_MODELS) {
+        const columns = await queryInterface.describeTable(tableName).catch(() => null);
+        if (!columns) continue;
+
+        if (!columns.id_institution) {
+            await queryInterface.addColumn(tableName, "id_institution", {
+                type: DataTypes.INTEGER,
+                allowNull: true,
+            });
+        }
+
+        await sequelize.query(
+            `UPDATE ${tableName} SET id_institution = :idInstitution WHERE id_institution IS NULL`,
+            { replacements: { idInstitution: defaultInstitution.id_institution } }
+        ).catch(() => null);
+    }
+
+    return defaultInstitution;
 };
 
 export const resolveTenantForUser = async (req, user) => {
