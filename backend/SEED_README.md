@@ -24,12 +24,12 @@ Ce script permet de créer rapidement des utilisateurs de test dans votre base d
      - Email: `admin@hestim.ma`
      - Mot de passe: `password123`
 
-   - **👨‍🏫 Enseignant**
-     - Email: `enseignant@hestim.ma`
+   - **👨‍🏫 Enseignant de démonstration**
+     - Email: `alain.bennis0@hestim.ma`
      - Mot de passe: `password123`
 
-   - **👨‍🎓 Étudiant**
-     - Email: `etudiant@hestim.ma`
+   - **👨‍🎓 Étudiant de démonstration**
+     - Email: `hamza.benali0@hestim.ma`
      - Mot de passe: `password123`
 
 4. **Connectez-vous** avec l'un de ces comptes sur la page de connexion !
@@ -67,11 +67,16 @@ curl -X POST http://localhost:5000/api/auth/register \
 ## 📋 Données créées par le seed
 
 Le script crée également :
-- ✅ 3 salles de test
-- ✅ 4 créneaux horaires
-- ✅ 3 cours de test
-- ✅ 1 filière (Génie Informatique)
-- ✅ 1 groupe (GI-3A)
+- ✅ 5 filières, 27 groupes et 60 cours
+- ✅ 35 salles réparties sur les bâtiments Gandhi et Stendhal
+- ✅ 30 créneaux horaires sur 6 jours
+- ✅ 90 enseignants et 701 étudiants
+- ✅ 60 affectations de planning sur la période de démonstration
+- ✅ 1 session de génération automatique et 1 snapshot actif
+- ✅ Des disponibilités/indisponibilités enseignants
+- ✅ 3 demandes de report (`en_attente`, `approuve`, `refuse`)
+- ✅ 2 conflits volontaires pour démontrer l'arbitrage
+- ✅ Des notifications pour les rôles admin, enseignant et étudiant
 
 ## ⚠️ Notes importantes
 
@@ -86,4 +91,3 @@ Si vous voulez réinitialiser complètement la base de données :
 1. Supprimez toutes les tables dans votre base de données MySQL
 2. Redémarrez le serveur (les tables seront recréées)
 3. Exécutez `npm run seed` pour créer les données de test
-
