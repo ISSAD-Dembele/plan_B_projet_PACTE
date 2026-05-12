@@ -5,7 +5,8 @@ import './models/index.js';
 import {
     Users, Enseignant, Etudiant, Filiere, Groupe, Salle, Cours, Creneau,
     Affectation, DemandeReport, Disponibilite, Notification, Conflit, Appartenir,
-    Institution
+    Institution, ConflitAffectation, HistoriqueAffectation, GenerationSession,
+    PlanningSnapshot
 } from './models/index.js';
 import { hashPassword } from './utils/passwordHelper.js';
 import { ensureTenantColumns } from './utils/tenantHelper.js';
@@ -226,6 +227,17 @@ const weekDate = (mondayStr, jour) => {
     d.setDate(d.getDate() + JOUR_OFF[jour]);
     return d.toISOString().slice(0, 10);
 };
+const addDays = (dateStr, days) => {
+    const d = new Date(dateStr);
+    d.setDate(d.getDate() + days);
+    return d.toISOString().slice(0, 10);
+};
+const localDateString = (date) => {
+    const y = date.getFullYear();
+    const m = String(date.getMonth() + 1).padStart(2, '0');
+    const d = String(date.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+};
 
 // Extrait le premier chiffre du label de niveau (ex: "3ème année" → "3")
 const niveauNum = (label) => label.match(/(\d)/)?.[1] ?? '1';
@@ -315,7 +327,8 @@ async function seed() {
 
         const models = [Users,Filiere,Salle,Creneau,Groupe,Cours,Enseignant,
                         Etudiant,Affectation,DemandeReport,Disponibilite,
-                        Notification,Conflit,Appartenir,Institution];
+                        Notification,Conflit,ConflitAffectation,HistoriqueAffectation,
+                        GenerationSession,PlanningSnapshot,Appartenir,Institution];
         for (const M of models) {
             try { await M.sync({ force:false }); } catch(e) { console.warn('⚠️', e.message); }
         }
@@ -340,8 +353,8 @@ async function seed() {
         const _now   = new Date();
         const _y     = _now.getFullYear();
         const _m     = _now.getMonth();
-        const DISPO_START  = new Date(_y, _m,     1).toISOString().slice(0, 10);
-        const DISPO_END    = new Date(_y, _m + 2, 0).toISOString().slice(0, 10);
+        const DISPO_START  = localDateString(new Date(_y, _m,     1));
+        const DISPO_END    = localDateString(new Date(_y, _m + 2, 0));
         const PERIOD_START = DISPO_START;
         const PERIOD_END   = DISPO_END;
 
@@ -550,9 +563,266 @@ async function seed() {
         console.log(`   ${HESTIM_CONFIG.batiments.map(b => `${b.nom.padEnd(12)} — ${b.salles.reduce((sum, s) => sum + s.noms.length, 0)} salles (${b.code}-*)`).join('\n   ')}`);
         
         console.log('\n📦 Volumes :');
+
+        // ── 9. Données métier de démonstration ───────────────────────────────
+        // Ces données donnent une base complète pour présenter les écrans :
+        // génération, emploi du temps, conflits, reports, notifications,
+        // disponibilités, historique et statistiques.
+        const mondays = getMondays(PERIOD_START, PERIOD_END);
+        const demoMondays = mondays.slice(0, 4);
+        const findSalle = (type, fallback = 0) => sallesList.find(s => s.type_salle === type) || sallesList[fallback];
+        const sallesDemo = {
+            cm: findSalle('Salle de cours'),
+            tp: findSalle('Laboratoire informatique'),
+            td: findSalle('Salle TD'),
+            amphi: findSalle('Amphithéâtre'),
+        };
+        const creneauKeys = [
+            'lundi_09:00', 'lundi_11:00', 'mardi_09:00', 'mardi_13:30',
+            'mercredi_09:00', 'jeudi_11:00', 'vendredi_14:30',
+        ];
+        const statutsDemo = ['confirme', 'planifie', 'confirme', 'reporte', 'annule'];
+        const affectationsDemo = [];
+
+        const pickSalleForCourse = (courseDef) => {
+            if (courseDef.type === 'TP') return sallesDemo.tp;
+            if (courseDef.type === 'TD') return sallesDemo.td;
+            if (courseDef.type === 'Projet') return sallesDemo.amphi;
+            return sallesDemo.cm;
+        };
+
+        const [generationSession] = await GenerationSession.findOrCreate({
+            where: {
+                label: 'Démo - génération automatique mai/juin 2026',
+                date_debut: PERIOD_START,
+                date_fin: PERIOD_END,
+                id_user_admin: admin.id_user,
+            },
+            defaults: {
+                id_institution: defaultInstitution.id_institution,
+                status: 'completed',
+                progress: 100,
+                last_message: 'Planning de démonstration généré avec succès',
+                score_total: 87,
+                score_detail: {
+                    capacite: 94,
+                    disponibilites: 82,
+                    repartition: 86,
+                    conflits: 2,
+                },
+                config: {
+                    mode: 'demo_complete',
+                    semaines: demoMondays.length,
+                    priorite: ['disponibilites', 'capacite_salle', 'repartition_groupes'],
+                },
+                nb_conflits: 2,
+                nb_non_placees: 3,
+                duration_ms: 18420,
+            },
+        });
+        await generationSession.update({ id_institution: defaultInstitution.id_institution });
+
+        const [snapshot] = await PlanningSnapshot.findOrCreate({
+            where: {
+                label: 'Planning actif - Démo complète',
+                date_debut: PERIOD_START,
+                date_fin: PERIOD_END,
+                id_user_admin: admin.id_user,
+            },
+            defaults: {
+                id_institution: defaultInstitution.id_institution,
+                is_active: true,
+                score_total: 87,
+                score_detail: generationSession.score_detail,
+                nb_conflits: 2,
+                id_generation_session: generationSession.id_generation_session,
+            },
+        });
+        await snapshot.update({ id_institution: defaultInstitution.id_institution, is_active: true });
+
+        for (const [idx, courseDef] of HESTIM_CONFIG.cours.entries()) {
+            const cours = coursMap[courseDef.code];
+            const groupeDef = GROUPES_DEF.find(g => g.filiere_code === courseDef.filiere && g.niveau === courseDef.niveau);
+            const groupe = groupeDef ? groupesMap[groupeDef.nom_groupe] : null;
+            const enseignantsDept = ensByDept[courseDef.dept] || fallbackPool;
+            const enseignant = enseignantsDept[idx % enseignantsDept.length] || fallbackPool[0];
+            const creneau = creneauxMap[creneauKeys[idx % creneauKeys.length]];
+            const salle = pickSalleForCourse(courseDef);
+            const monday = demoMondays[idx % demoMondays.length] || PERIOD_START;
+            const jour = creneau.jour_semaine;
+            const dateSeance = weekDate(monday, jour);
+            if (!cours || !groupe || !enseignant || !creneau || !salle) continue;
+
+            const [affectation] = await Affectation.findOrCreate({
+                where: {
+                    date_seance: dateSeance,
+                    id_cours: cours.id_cours,
+                    id_groupe: groupe.id_groupe,
+                    id_user_enseignant: enseignant.id_user,
+                    id_creneau: creneau.id_creneau,
+                },
+                defaults: {
+                    id_institution: defaultInstitution.id_institution,
+                    statut: statutsDemo[idx % statutsDemo.length],
+                    commentaire: `Séance de démonstration - ${courseDef.type}`,
+                    id_salle: salle.id_salle,
+                    id_user_admin: admin.id_user,
+                    id_snapshot: snapshot.id_snapshot,
+                    id_generation_session: generationSession.id_generation_session,
+                    is_generated: true,
+                    score_contrib: 80 + (idx % 18),
+                },
+            });
+            await affectation.update({
+                id_institution: defaultInstitution.id_institution,
+                id_snapshot: snapshot.id_snapshot,
+                id_generation_session: generationSession.id_generation_session,
+            });
+            affectationsDemo.push(affectation);
+
+            if (idx < 12) {
+                await HistoriqueAffectation.findOrCreate({
+                    where: {
+                        id_affectation: affectation.id_affectation,
+                        action: 'creation',
+                        id_user: admin.id_user,
+                    },
+                    defaults: {
+                        anciens_donnees: null,
+                        nouveaux_donnees: {
+                            date_seance: dateSeance,
+                            statut: affectation.statut,
+                            id_salle: salle.id_salle,
+                        },
+                        commentaire: 'Création par le seed de démonstration',
+                    },
+                });
+            }
+        }
+
+        // Disponibilités contrastées pour tester les filtres enseignant.
+        const dispoScenarios = [
+            { user: enseignantsList[0]?.user, key: 'lundi_09:00', disponible: false, raison: 'Réunion de coordination pédagogique' },
+            { user: enseignantsList[1]?.user, key: 'mardi_13:30', disponible: false, raison: 'Intervention externe' },
+            { user: enseignantsList[2]?.user, key: 'vendredi_14:30', disponible: true, raison: null },
+            { user: enseignantsList[3]?.user, key: 'mercredi_09:00', disponible: false, raison: 'Soutenance PFE' },
+        ];
+        for (const d of dispoScenarios) {
+            if (!d.user || !creneauxMap[d.key]) continue;
+            const [dispo] = await Disponibilite.findOrCreate({
+                where: {
+                    id_user_enseignant: d.user.id_user,
+                    id_creneau: creneauxMap[d.key].id_creneau,
+                    date_debut: PERIOD_START,
+                    date_fin: PERIOD_END,
+                },
+                defaults: {
+                    id_institution: defaultInstitution.id_institution,
+                    disponible: d.disponible,
+                    raison_indisponibilite: d.raison,
+                },
+            });
+            await dispo.update({ id_institution: defaultInstitution.id_institution });
+        }
+
+        // Reports dans les trois états pour démontrer le workflow admin.
+        const reportScenarios = [
+            { index: 0, statut: 'en_attente', motif: 'Participation à une réunion académique urgente.' },
+            { index: 1, statut: 'approuve', motif: 'Déplacement professionnel validé.' },
+            { index: 2, statut: 'refuse', motif: 'Demande incompatible avec les contraintes de groupe.' },
+        ];
+        for (const r of reportScenarios) {
+            const aff = affectationsDemo[r.index];
+            if (!aff) continue;
+            const [demande] = await DemandeReport.findOrCreate({
+                where: {
+                    id_affectation: aff.id_affectation,
+                    id_user_enseignant: aff.id_user_enseignant,
+                    statut_demande: r.statut,
+                },
+                defaults: {
+                    id_institution: defaultInstitution.id_institution,
+                    motif: r.motif,
+                    nouvelle_date: addDays(aff.date_seance, 7),
+                },
+            });
+            await demande.update({ id_institution: defaultInstitution.id_institution });
+        }
+
+        // Conflits volontairement visibles : salle et enseignant.
+        const conflictPairs = affectationsDemo.slice(0, 4);
+        const conflitSalleDate = conflictPairs[0]?.date_seance || PERIOD_START;
+        const conflitCreneau = creneauxMap['lundi_09:00'] || creneauxList[0];
+        const conflitSalle = sallesDemo.cm || sallesList[0];
+
+        if (conflictPairs[0] && conflictPairs[1]) {
+            await conflictPairs[0].update({ date_seance: conflitSalleDate, id_creneau: conflitCreneau.id_creneau, id_salle: conflitSalle.id_salle });
+            await conflictPairs[1].update({ date_seance: conflitSalleDate, id_creneau: conflitCreneau.id_creneau, id_salle: conflitSalle.id_salle });
+            const [conflitSalleRec] = await Conflit.findOrCreate({
+                where: {
+                    type_conflit: 'salle',
+                    description: `Salle ${conflitSalle.nom_salle} réservée sur deux séances le ${conflitSalleDate} à ${conflitCreneau.heure_debut}.`,
+                },
+                defaults: { id_institution: defaultInstitution.id_institution, resolu: false },
+            });
+            await conflitSalleRec.update({ id_institution: defaultInstitution.id_institution });
+            for (const aff of conflictPairs.slice(0, 2)) {
+                await ConflitAffectation.findOrCreate({
+                    where: { id_conflit: conflitSalleRec.id_conflit, id_affectation: aff.id_affectation },
+                    defaults: { id_conflit: conflitSalleRec.id_conflit, id_affectation: aff.id_affectation },
+                });
+            }
+        }
+
+        if (conflictPairs[2] && conflictPairs[3]) {
+            await conflictPairs[3].update({
+                date_seance: conflictPairs[2].date_seance,
+                id_creneau: conflictPairs[2].id_creneau,
+                id_user_enseignant: conflictPairs[2].id_user_enseignant,
+            });
+            const [conflitEnsRec] = await Conflit.findOrCreate({
+                where: {
+                    type_conflit: 'enseignant',
+                    description: `Un même enseignant est affecté sur deux séances le ${conflictPairs[2].date_seance}.`,
+                },
+                defaults: { id_institution: defaultInstitution.id_institution, resolu: false },
+            });
+            await conflitEnsRec.update({ id_institution: defaultInstitution.id_institution });
+            for (const aff of conflictPairs.slice(2, 4)) {
+                await ConflitAffectation.findOrCreate({
+                    where: { id_conflit: conflitEnsRec.id_conflit, id_affectation: aff.id_affectation },
+                    defaults: { id_conflit: conflitEnsRec.id_conflit, id_affectation: aff.id_affectation },
+                });
+            }
+        }
+
+        // Notifications pour les rôles principaux.
+        const notificationScenarios = [
+            { user: admin, type: 'success', titre: 'Planning généré', message: 'Le planning de démonstration est prêt avec des conflits à arbitrer.', lien: '/gestion/generation-automatique' },
+            { user: enseignantsList[0]?.user, type: 'warning', titre: 'Demande de report en attente', message: 'Votre demande de report a été transmise à l’administration.', lien: '/demandes-report' },
+            { user: firstEtu[0], type: 'info', titre: 'Emploi du temps publié', message: 'Votre emploi du temps de démonstration est disponible.', lien: '/emploi-du-temps' },
+            { user: firstEtu[1], type: 'info', titre: 'Séance reportée', message: 'Une séance a été déplacée dans votre planning.', lien: '/emploi-du-temps' },
+        ];
+        for (const n of notificationScenarios) {
+            if (!n.user) continue;
+            const [notification] = await Notification.findOrCreate({
+                where: { id_user: n.user.id_user, titre: n.titre, type_notification: n.type },
+                defaults: {
+                    id_institution: defaultInstitution.id_institution,
+                    message: n.message,
+                    lien: n.lien,
+                    lue: false,
+                },
+            });
+            await notification.update({ id_institution: defaultInstitution.id_institution });
+        }
+
+        await generationSession.update({ nb_assignees: affectationsDemo.length });
+        await snapshot.update({ nb_affectations: affectationsDemo.length });
+
         console.log(`   Filières: ${Object.keys(filieresMap).length}  |  Groupes: ${GROUPES_DEF.length}  |  Salles: ${sallesList.length}  |  Créneaux: ${creneauxList.length}`);
         console.log(`   Enseignants: ${enseignantsList.length}  |  Étudiants: ${etuCount}  |  Cours: ${HESTIM_CONFIG.cours.length}`);
-        console.log(`   Affectations: (non générées dans cette version finale)  |  Période: ${PERIOD_START} → ${PERIOD_END}`);
+        console.log(`   Affectations: ${affectationsDemo.length}  |  Reports: 3  |  Conflits démo: 2  |  Période: ${PERIOD_START} → ${PERIOD_END}`);
         
         console.log('\n📋 Comptes de test :');
         console.log(`   👨‍💼 Admin : ${HESTIM_CONFIG.admins[0].email}  (password123)`);
