@@ -47,6 +47,7 @@ export default function GenerationAutomatique() {
     const { user } = useAuth();
     const isMountedRef = useRef(true);
     const [loading, setLoading] = useState(false);
+    const [loadingData, setLoadingData] = useState(true);
     const [cours, setCours] = useState([]);
     const [groupes, setGroupes] = useState([]);
     const [selectedCours, setSelectedCours] = useState([]);
@@ -74,6 +75,11 @@ export default function GenerationAutomatique() {
     }, []);
 
     const loadData = async () => {
+        if (isMountedRef.current) {
+            setLoadingData(true);
+            setError("");
+        }
+
         try {
             console.log("🔄 Début du chargement des données...");
             console.log("🔐 Vérification de l'authentification...");
@@ -93,10 +99,8 @@ export default function GenerationAutomatique() {
             
             if (isMountedRef.current) {
                 // Gérer différentes structures de réponses possibles
-                const coursList = Array.isArray(coursData) ? coursData : 
-                                (coursData.data && Array.isArray(coursData.data)) ? coursData.data : [];
-                const groupesList = Array.isArray(groupesData) ? groupesData : 
-                                  (groupesData.data && Array.isArray(groupesData.data)) ? groupesData.data : [];
+                const coursList = extractList(coursData);
+                const groupesList = extractList(groupesData);
                 
                 console.log("📊 Listes traitées - Cours:", coursList.length, "Groupes:", groupesList.length);
                 setCours(coursList);
@@ -126,7 +130,20 @@ export default function GenerationAutomatique() {
                     setError(`Erreur lors du chargement des données: ${err.message || 'Erreur inconnue'}`);
                 }
             }
+        } finally {
+            if (isMountedRef.current) {
+                setLoadingData(false);
+            }
         }
+    };
+
+    const extractList = (response) => {
+        if (Array.isArray(response)) return response;
+        if (Array.isArray(response?.data)) return response.data;
+        if (Array.isArray(response?.rows)) return response.rows;
+        if (Array.isArray(response?.items)) return response.items;
+        if (Array.isArray(response?.results)) return response.results;
+        return [];
     };
 
     const handleGenerer = async () => {
@@ -223,19 +240,19 @@ export default function GenerationAutomatique() {
                 )}
 
                 {/* Indicateurs de chargement et état des données */}
-                {cours.length === 0 && groupes.length === 0 && !error && (
+                {loadingData && !error && (
                     <Alert severity="info" sx={{ mb: 3 }}>
                         Chargement des données en cours...
                     </Alert>
                 )}
 
-                {cours.length === 0 && !error && (
+                {!loadingData && cours.length === 0 && !error && (
                     <Alert severity="warning" sx={{ mb: 3 }}>
                         Aucun cours trouvé. Veuillez d'abord créer des cours avant de générer les emplois du temps.
                     </Alert>
                 )}
 
-                {groupes.length === 0 && !error && (
+                {!loadingData && groupes.length === 0 && !error && (
                     <Alert severity="warning" sx={{ mb: 3 }}>
                         Aucun groupe trouvé. Veuillez d'abord créer des groupes avant de générer les emplois du temps.
                     </Alert>
